@@ -1,0 +1,42 @@
+# CellType-Agent GPU Requirements
+# For GPU-intensive services
+
+# Core ML
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# Transformers
+transformers>=4.36.0
+accelerate>=0.25.0
+safetensors>=0.4.0
+
+# Structure prediction
+boltz>=0.1.0
+alphafold>=2.3.0
+
+# Molecular modeling
+rdkit>=2023.9.1
+openbabel>=3.1.1
+pdbfixer>=1.9
+mdtraj>=1.9.9
+
+# Diffusion models
+diffusers>=0.25.0
+einops>=0.7.0
+
+# Protein models
+esm>=2.0.0
+fair-esm>=2.0.0
+
+# Docking
+diffdock>=1.0.0
+
+# Vector database
+qdrant-client>=1.7.0
+
+# Misc
+numpy>=1.26.0
+scipy>=1.11.0
+pandas>=2.1.0
+h5py>=3.10.0

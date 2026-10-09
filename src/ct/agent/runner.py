@@ -26,6 +26,108 @@ class AgentContext:
     start_time: float = field(default_factory=time.time)
 
 
+def _split_top_level(argstr: str, open_ch: str = "(", close_ch: str = ")") -> list[str]:
+    """Split an argument string on commas that are not nested or quoted.
+
+    A non-greedy regex cannot do this: ``TOOL: f(a, g(1, 2))`` would truncate at
+    the first ``)``. This walks the string tracking depth and quote state.
+    """
+    parts, buf, depth, quote, escape = [], [], 0, None, False
+    for ch in argstr:
+        if escape:
+            buf.append(ch)
+            escape = False
+            continue
+        if ch == "\\" and quote:
+            escape = True
+            buf.append(ch)
+            continue
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    if buf:
+        parts.append("".join(buf))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _parse_tool_args(argstr: str) -> dict:
+    """Parse tool call arguments into a dict.
+
+    Handles the three shapes models actually emit:
+      1. JSON object:      {"smiles": "CCO"}
+      2. Bare kwargs:      smiles="CCO", limit=20
+      3. Positional pairs: "CCO", 20
+
+    Falls back to ``{"raw": argstr}`` only when nothing parses, and flags it via
+    a ``_parse_error`` key so callers can tell a malformed call from a real one
+    instead of silently forwarding garbage to a tool.
+    """
+    argstr = (argstr or "").strip()
+    if not argstr:
+        return {}
+
+    # 1. JSON object
+    if argstr.startswith("{"):
+        try:
+            parsed = json.loads(argstr)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    # 2. kwargs: key=value pairs (value may be quoted or bare)
+    kwargs = {}
+    positional = []
+    for part in _split_top_level(argstr):
+        if "=" not in part:
+            positional.append(part)
+            continue
+        key, _, value = part.partition("=")
+        key = key.strip()
+        if not key.isidentifier():
+            positional.append(part)
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        else:
+            try:
+                value = json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        kwargs[key] = value
+
+    # Keep nested/positional fragments under a stable key rather than dropping
+    # them: `f(a=1, g(2, 3))` must not silently lose `g(2, 3)`.
+    if positional:
+        for i, raw in enumerate(positional):
+            key = f"arg{i}" if i else "value"
+            try:
+                kwargs[key] = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                kwargs[key] = raw
+
+    if kwargs:
+        return kwargs
+
+    return {"raw": argstr, "_parse_error": "unparseable tool arguments"}
+
+
 class AgentRunner:
     """
     Main agent runner for single-agent mode.
@@ -212,21 +314,106 @@ Format responses clearly with sections for:
             raise
 
     def _extract_tool_calls(self, response: str) -> list[dict]:
-        """Extract tool calls from response."""
-        # Simple extraction - look for tool call patterns
-        tool_calls = []
+        """Extract tool calls from a model response.
 
-        # Check for explicit tool call format
-        if "TOOL:" in response:
-            import re
-            pattern = r"TOOL:\s*(\w+)\s*\((.*?)\)"
-            matches = re.findall(pattern, response)
-            for tool_name, params_str in matches:
-                try:
-                    params = json.loads(params_str) if params_str else {}
-                except json.JSONDecodeError:
-                    params = {"raw": params_str}
-                tool_calls.append({"tool": tool_name, "params": params})
+        The previous implementation used ``TOOL:\\s*(\\w+)\\s*\\((.*?)\\)`` which
+        failed in three ways:
+
+          1. ``\\w+`` does not match a dot, so no namespaced tool
+             (``admet.predict``, ``boltz2.predict_affinity``, ...) could ever be
+             extracted. Every registered tool in this repo is namespaced, so
+             the pattern matched nothing useful.
+          2. ``(.*?)`` is non-greedy and stops at the first ``)``, truncating
+             any call containing a nested expression such as ``f(g(1), 2)``.
+          3. Parameters were fed to ``json.loads`` directly, so the common
+             ``smiles="CCO", limit=20`` form always failed and degraded to
+             ``{"raw": ...}``, which tools then received verbatim.
+
+        Now the call body is scanned with balanced-paren awareness and parsed by
+        _parse_tool_args, which handles JSON objects, bare kwargs, and
+        positional arguments.
+        """
+        if not response or "TOOL:" not in response:
+            return []
+
+        tool_calls: list[dict] = []
+        idx = 0
+        marker = "TOOL:"
+
+        while True:
+            pos = response.find(marker, idx)
+            if pos == -1:
+                break
+
+            cursor = pos + len(marker)
+            # Skip whitespace between "TOOL:" and the name.
+            while cursor < len(response) and response[cursor].isspace():
+                cursor += 1
+
+            # Tool name: allow letters, digits, underscore and dot.
+            name_start = cursor
+            while cursor < len(response) and (
+                response[cursor].isalnum()
+                or response[cursor] in "._-"
+            ):
+                cursor += 1
+            tool_name = response[name_start:cursor]
+
+            if not tool_name:
+                idx = pos + len(marker)
+                continue
+
+            # Optional whitespace, then the argument list.
+            while cursor < len(response) and response[cursor].isspace():
+                cursor += 1
+
+            if cursor >= len(response) or response[cursor] != "(":
+                # A TOOL: mention with no call — record it so the model gets
+                # feedback rather than the call vanishing silently.
+                tool_calls.append({
+                    "tool": tool_name,
+                    "params": {},
+                    "_parse_error": "no argument list found after tool name",
+                })
+                idx = cursor
+                continue
+
+            # Walk to the matching close paren, respecting quotes and strings.
+            depth, quote, escape, args_start = 0, None, False, cursor + 1
+            i = cursor
+            while i < len(response):
+                ch = response[i]
+                if escape:
+                    escape = False
+                elif ch == "\\" and quote:
+                    escape = True
+                elif quote:
+                    if ch == quote:
+                        quote = None
+                elif ch in "\"'":
+                    quote = ch
+                elif ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+
+            if depth != 0:
+                # Unbalanced: take the rest of the response rather than dropping
+                # the call entirely.
+                argstr = response[args_start:]
+                idx = len(response)
+            else:
+                argstr = response[args_start:i]
+                idx = i + 1
+
+            params = _parse_tool_args(argstr)
+            call = {"tool": tool_name, "params": params}
+            if params.get("_parse_error"):
+                call["_parse_error"] = params["_parse_error"]
+            tool_calls.append(call)
 
         return tool_calls
 

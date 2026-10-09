@@ -621,7 +621,16 @@ async def predict_protein_structure(sequence: str):
 
     service = Boltz2Service()
     if not service.is_available():
-        raise HTTPException(status_code=503, detail="GPU service not available")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Boltz-2 backend unavailable. This build ships no structure "
+                "prediction model, and returning placeholder constants with a "
+                "confidence score would be indistinguishable from a real "
+                "result. Set CT_GPU_SERVICES=1 only if you accept placeholder "
+                "output."
+            ),
+        )
 
     result = service.predict_structure(sequence)
 
@@ -630,6 +639,7 @@ async def predict_protein_structure(sequence: str):
         "confidence": result.confidence,
         "plddt": result.plddt,
         "prediction_time_s": result.prediction_time_s,
+        "is_real_result": result.is_real_result,
     }
 
 
@@ -649,6 +659,7 @@ async def predict_binding_affinity(protein_sequence: str, ligand_smiles: str):
         "confidence": result.confidence,
         "delta_g": result.delta_g,
         "prediction_time_s": result.prediction_time_s,
+        "is_real_result": result.is_real_result,
     }
 
 

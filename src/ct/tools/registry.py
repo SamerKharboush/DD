@@ -4,10 +4,18 @@ Tool Registry for CellType-Agent.
 Central registry for all tools that agents can use.
 """
 
+import importlib
 import logging
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger("ct.tools.registry")
+
+_PLACEHOLDER_ERROR = (
+    "This tool has no implementation in this build. It previously returned "
+    "hardcoded placeholder values (for example affinity_nm=50, score=0.85) "
+    "which were indistinguishable from real measurements. It now raises "
+    "instead, so no caller can rank against invented data."
+)
 
 
 class BaseTool:
@@ -20,6 +28,23 @@ class BaseTool:
     def run(self, **kwargs) -> Any:
         """Execute the tool."""
         raise NotImplementedError("Subclasses must implement run()")
+
+
+class UnavailableTool(BaseTool):
+    """Placeholder for a tool that has no backend in this build.
+
+    Raises on use rather than returning constants. Every ``run`` result is
+    therefore traceable to real computation or to a loud failure.
+    """
+
+    name = "unavailable"
+    description = "Tool unavailable in this build"
+    parameters: dict = {}
+
+    def run(self, **kwargs) -> Any:
+        raise NotImplementedError(
+            f"{self.name}: {_PLACEHOLDER_ERROR}"
+        )
 
 
 class ToolRegistry:
@@ -86,9 +111,23 @@ class ToolRegistry:
         return list(self._tools.keys())
 
     def _lazy_init(self):
-        """Lazy initialization of tools."""
+        """Lazy initialization of tools.
+
+        The real implementations in phase1/2/3_tools.py and
+        structure_io_tools.py are imported first and take precedence. The
+        fallback classes below only fill names that are still missing, and they
+        raise rather than return invented numbers.
+        """
         if self._initialized:
             return
+
+        # Real implementations win. Import them before installing any fallback.
+        for mod in ("ct.tools.phase1_tools", "ct.tools.phase2_tools",
+                    "ct.tools.phase3_tools", "ct.tools.structure_io_tools"):
+            try:
+                importlib.import_module(mod)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Tool module %s failed to import: %s", mod, exc)
 
         # Register core tools
         self._register_admet_tools()
@@ -160,110 +199,71 @@ class ToolRegistry:
         except ImportError:
             logger.debug("Knowledge graph tools not available")
 
-        # Mock knowledge tool
-        class MockKnowledgeTool(BaseTool):
-            name = "knowledge.query"
-            description = "Mock knowledge graph query"
-
-            def run(self, query: str, **kwargs) -> dict:
-                return {
-                    "query": query,
-                    "results": [
-                        {"entity": "KRAS", "type": "Gene", "relevance": 0.95},
-                        {"entity": "Sotorasib", "type": "Drug", "relevance": 0.92},
-                    ],
-                }
+        # Fallbacks for names with no real implementation. These raise on use
+        # rather than returning fixed entities, which previously looked like
+        # genuine graph results.
+        def _unavailable(name: str, description: str) -> UnavailableTool:
+            tool = UnavailableTool()
+            tool.name = name
+            tool.description = description
+            return tool
 
         if "knowledge.query" not in self._tools:
-            self.register("knowledge.query", MockKnowledgeTool())
+            self.register(
+                "knowledge.query",
+                _unavailable("knowledge.query", "Knowledge graph query (no backend)"),
+            )
 
-        # Additional knowledge tools
-        class MockGeneDiseasesTool(BaseTool):
-            name = "knowledge.get_gene_diseases"
-            description = "Get diseases associated with a gene"
+        if "knowledge.get_gene_diseases" not in self._tools:
+            self.register(
+                "knowledge.get_gene_diseases",
+                _unavailable("knowledge.get_gene_diseases",
+                             "Gene-disease associations (no backend)"),
+            )
 
-            def run(self, gene_name: str, **kwargs) -> dict:
-                return {
-                    "gene": gene_name,
-                    "diseases": [
-                        {"name": "Cancer", "association_score": 0.95},
-                        {"name": "RASopathy", "association_score": 0.85},
-                    ],
-                }
-
-        self.register("knowledge.get_gene_diseases", MockGeneDiseasesTool())
-
-        class MockDrugTargetsTool(BaseTool):
-            name = "knowledge.get_drug_targets"
-            description = "Get targets for a drug"
-
-            def run(self, drug_name: str, **kwargs) -> dict:
-                return {
-                    "drug": drug_name,
-                    "targets": [
-                        {"name": "KRAS G12C", "affinity_nm": 50},
-                    ],
-                }
-
-        self.register("knowledge.get_drug_targets", MockDrugTargetsTool())
+        if "knowledge.get_drug_targets" not in self._tools:
+            self.register(
+                "knowledge.get_drug_targets",
+                _unavailable("knowledge.get_drug_targets",
+                             "Drug targets (no backend)"),
+            )
 
     def _register_generative_tools(self):
         """Register generative design tools."""
-        class MockBoltzTool(BaseTool):
-            name = "boltz2.predict_affinity"
-            description = "Predict binding affinity"
+        def _unavailable(name: str, description: str) -> UnavailableTool:
+            tool = UnavailableTool()
+            tool.name = name
+            tool.description = description
+            return tool
 
-            def run(self, protein_sequence: str = None, ligand_smiles: str = None, **kwargs) -> dict:
-                return {
-                    "affinity_nm": 50,
-                    "confidence": 0.8,
-                    "protein": protein_sequence[:50] if protein_sequence else "N/A",
-                }
+        if "boltz2.predict_affinity" not in self._tools:
+            self.register(
+                "boltz2.predict_affinity",
+                _unavailable("boltz2.predict_affinity",
+                             "Binding affinity (no Boltz-2 backend)"),
+            )
 
-        self.register("boltz2.predict_affinity", MockBoltzTool())
-
-        class MockDesignTool(BaseTool):
-            name = "generative.design_binder"
-            description = "Design a binder protein"
-
-            def run(self, target_sequence: str = None, **kwargs) -> dict:
-                return {
-                    "candidates": [
-                        {"sequence": "MKVLQEPTPDDVEPIVAAE", "score": 0.85},
-                        {"sequence": "MKVLQEPTPDDVEPIVAAF", "score": 0.82},
-                    ],
-                }
-
-        self.register("generative.design_binder", MockDesignTool())
+        if "generative.design_binder" not in self._tools:
+            self.register(
+                "generative.design_binder",
+                _unavailable("generative.design_binder",
+                             "Binder design (no generative backend)"),
+            )
 
     def _register_structure_tools(self):
         """Register structure I/O tools."""
-        class MockH5ADTool(BaseTool):
-            name = "structure.analyze_h5ad"
-            description = "Analyze h5ad single-cell data"
+        def _unavailable(name: str, description: str) -> UnavailableTool:
+            tool = UnavailableTool()
+            tool.name = name
+            tool.description = description
+            return tool
 
-            def run(self, file_path: str = None, **kwargs) -> dict:
-                return {
-                    "n_cells": 1000,
-                    "n_genes": 20000,
-                    "cell_types": ["T cell", "B cell", "NK cell"],
-                }
-
-        self.register("structure.analyze_h5ad", MockH5ADTool())
-
-        class MockPDBTool(BaseTool):
-            name = "structure.load_pdb"
-            description = "Load PDB structure"
-
-            def run(self, pdb_id: str = None, **kwargs) -> dict:
-                return {
-                    "pdb_id": pdb_id,
-                    "n_chains": 2,
-                    "n_residues": 350,
-                    "resolution": 2.5,
-                }
-
-        self.register("structure.load_pdb", MockPDBTool())
+        for name, desc in (
+            ("structure.analyze_h5ad", "h5ad analysis (no backend)"),
+            ("structure.load_pdb", "PDB load (no backend)"),
+        ):
+            if name not in self._tools:
+                self.register(name, _unavailable(name, desc))
 
 
 # Global registry instance

@@ -1,38 +1,109 @@
-# CellType-Agent
+# DrugDiscovery (DD)
 
-**Production-Ready AI-Powered Drug Discovery System**
+**Multi-agent drug discovery toolkit** — a fork of
+[celltype/celltype-agent](https://github.com/celltype/celltype-agent) (MIT,
+© 2026 CellType Inc), maintained by
+[Samer Kharboush](https://github.com/SamerKharboush).
 
-> Achieving **90% accuracy on BixBench-Verified-50** — 24+ points ahead of Claude Code alone
+> **Status: beta.** This is an active fork with known open defects, several of
+> them serious. See [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) before
+> deploying anything, and [`NOTICE`](NOTICE) for provenance and licensing.
 
----
+> **No benchmark claim is made here.** An earlier version of this README
+> advertised "90% accuracy on BixBench-Verified-50" and "Production Ready 95%".
+> Both have been removed because they were not supportable. On BixBench, an
+> independent audit by Generality Labs found a faulty judge (~10% false
+> negatives), with flawed tasks and grader errors accounting for roughly 70% of
+> observed failures and a 42-point swing in scores from corrections alone;
+> separate published results on that benchmark sit near ceiling (88/84/98%), so
+> it no longer discriminates between systems. Quoting a score on it means
+> little. The "Production Ready" claim was simply false: the tool registry
+> shipped broken, so no agent tool was reachable at runtime.
 
- ## What Makes This Implementation Special?
- 
- This is a **a multi-agentic specialists Improved** of the original CellType-Agent with massive enhancements for enterprise deployment.
- 
- ### Original vs. Enhanced Comparison
- 
- | Feature | Original CellType-Agent | **This Implementation** | Improvement |
- |---------|------------------------|------------------------|-------------|
- | **Architecture** | Single-agent CLI tool | **Multi-agent orchestration system** | 5x more sophisticated |
- | **Agent System** | Claude-only execution | **5 specialist agents + adversarial critic** | Robin paradigm |
- | **Deployment** | Local CLI only | **Docker Compose + Kubernetes ready** | Production-grade |
- | **Security** | None | **JWT auth + API keys + secrets vault** | Enterprise-ready |
- | **Monitoring** | Basic logging | **Prometheus + Grafana + structured logs** | Full observability |
- | **API** | No API | **FastAPI REST API with 20+ endpoints** | Integration-ready |
- | **Testing** | Basic tests | **60+ integration tests (95% pass rate)** | Production-quality |
- | **Error Handling** | Basic try/catch | **8 exception types + retry logic + validation** | Robust |
- | **LLM Support** | Anthropic only | **Multi-provider (Anthropic/OpenAI/Local)** | Flexible |
- | **Local LLM** | Not supported | **vLLM + LoRA + hybrid routing** | Cost-effective |
- | **GPU Integration** | Limited | **Boltz-2 + DiffDock + resource management** | High-performance |
- | **RLEF Training** | Not available | **DPO/KTO/ORPO with feedback loop** | Self-improving |
- | **Data Loading** | Manual | **Automated DRKG downloader + batch processing** | Turnkey |
- | **DMTA Cycle** | Not available | **Complete 4-phase iterative optimization** | Advanced workflow |
- | **Knowledge Graph** | Basic queries | **GraphRAG + Neo4j + 5.8M triplets** | Enterprise-scale |
- | **Session Management** | None | **PostgreSQL + feedback tracking + RLEF** | Production-ready |
- | **Cost Optimization** | Fixed cost | **Hybrid routing saves 90%+ on queries** | Cost-efficient |
- | **Scalability** | Single instance | **Horizontal scaling + load balancing** | Cloud-native |
- | **Documentation** | Basic README | **3 comprehensive guides + API docs** | Complete |
+## Measured state
+
+Reproduce with `pytest tests -q`:
+
+| | |
+|---|---|
+| Tests | 142 collected, **129 passing (91%)** |
+| Test files | 5 |
+| Registered tools | **41 real, 1 unavailable stub** |
+| Unauthenticated cost-incurring endpoints | **0** (was 16) |
+| Placeholder results served as measured | **none** |
+
+## What is real, and what is not
+
+This distinction matters more than any feature list, because earlier revisions
+of this README blurred it.
+
+**Working:** the tool registry (41 tools, all callable), JWT authentication and
+API-key auth on every cost-incurring endpoint, the agent runner's tool-call
+parser, ADMET / DRKG / structure-I/O / DMTA / RLEF modules, session trace
+persistence, Docker Compose stack.
+
+**Not working — do not rely on:**
+
+- **Structure prediction, binding affinity, and molecular docking are not
+  implemented.** `Boltz2Service` and `DiffDockService` return placeholder
+  constants. `is_available()` reports `False`, so the API returns `503` rather
+  than a fabricated structure — but no real inference exists in this build. Any
+  binding, docking, or confidence number you have seen from earlier versions was
+  a hardcoded literal, not a computation.
+- **`structure.load_pdb` is a stub** that raises. It does not fetch anything.
+- The API has **no rate limiting**, so authenticated callers can still exhaust
+  vendor API budget. Compose ships insecure default credentials — do not use it
+  as-is outside development.
+
+Full detail with file and line references in
+[`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
+
+## Relationship to upstream
+
+This is a **fork**, tracked against `celltype/celltype-agent` at `c786f9d`. It
+adds local/GPU depth, ADMET, RLEF, knowledge-graph, campaign and memory modules
+that upstream does not carry. It is not a superset: upstream has cloud billing,
+a UI, and a knowledge base that this fork lacks.
+
+The two repositories have **no shared git history** — there is no merge base, so
+this is not a descendant of upstream and the histories cannot be merged. See
+[`NOTICE`](NOTICE) for the full modification inventory.
+
+Upstream's MIT licence requires its copyright notice to travel with the code;
+both notices are retained in [`LICENSE`](LICENSE).
+
+## Status by area
+
+| Area | State |
+|---|---|
+| Tool registry | Working — 41 tools registered and callable |
+| Authentication | Working — JWT via PyJWT, enforced on all cost-incurring routes |
+| Agent runner | Working — namespaced tool names, nested argument parsing |
+| ADMET / structure I/O | Implemented |
+| DMTA / RLEF / campaign | Implemented, **untested** |
+| GPU inference | **Placeholder only** — returns 503 |
+| Rate limiting | **Absent** |
+| Dependency pinning | **No lockfile**; `>=` floors only |
+
+<details>
+<summary>Capability comparison against upstream (supersedes the old "5x more sophisticated" table)</summary>
+
+The previous table graded upstream on 12+ dimensions and awarded this fork a
+win in every row. That was marketing, not measurement, and several rows were
+factually wrong about upstream. A capability comparison, without scores:
+
+**This fork adds:** ADMET prediction, RLEF (DPO/KTO/ORPO) training with a
+feedback loop, Neo4j + GraphRAG knowledge graph, Boltz-2/DiffDock GPU service
+scaffolding, local LLM with LoRA and hybrid routing, vector memory, session
+tracing and feedback collection, campaign orchestration, the FastAPI service.
+
+**Upstream has and this fork lacks:** cloud billing and Stripe integration,
+Modal deployment, the terminal UI, a knowledge-base module, a report generator,
+`openspec/`, CI configuration, `install.sh`, and a far larger test suite.
+
+Neither project is a superset of the other.
+
+</details>
  
  ### Key Innovations
  
@@ -111,8 +182,8 @@
  
  **Original:** ~20 basic unit tests
  
- **Enhanced:** 60+ integration tests covering all critical paths
- 
+ **This fork:** 142 tests collected, 129 passing (91%) across 5 files
+
  ```
  Test Coverage:
  ✅ All imports (10/10 tests)
@@ -128,7 +199,7 @@
  ✅ RLEF training (2/2 tests)
  ✅ API models (3/3 tests)
  
- Pass Rate: 95% (37/39 tests)
+ Pass Rate: see `pytest tests -q` (currently 129/142)
  ```
  
  **Impact:** Production-quality reliability
@@ -148,20 +219,32 @@
  
  **Impact:** 99.5%+ uptime in production
  
- #### 7. Enterprise Security
- 
- **Original:** No security features
- 
- **Enhanced:** Multi-layer security
- 
- - **Authentication:** JWT tokens + API keys
- - **Authorization:** Role-based access control (RBAC)
- - **Secrets Management:** HashiCorp Vault integration
- - **Rate Limiting:** Per-user quotas
- - **Input Validation:** All inputs sanitized
- - **Audit Logging:** All actions tracked
- 
- **Impact:** SOC 2 compliance-ready
+ #### 7. Security
+
+ **State as of this commit — read this before exposing the API:**
+
+ Working:
+ - JWT authentication (PyJWT, HS256) enforced on all 16 cost-incurring
+   endpoints; admin role required for training triggers and key creation
+ - API-key authentication
+ - Secrets file written with `0600` permissions
+ - CORS restricted to an explicit origin allowlist
+
+ Not implemented — despite appearing in earlier revisions of this README:
+ - **Rate limiting: absent.** The `RateLimiter` class has zero call sites and
+   the API-key `rate_limit` field is stored but never enforced.
+ - **RBAC: not applied.** `require_role()` exists and is called from nowhere.
+   The `require_admin` dependency on `/api/v1/rlef/train` and `/api/v1/api-keys`
+   is the only role check in the codebase.
+ - **Vault integration: not present.**
+ - **Input sanitisation: partial.** No rate limiting means unbounded input on
+   the knowledge-graph query path; see `docs/KNOWN_ISSUES.md`.
+
+ `docker-compose.yml` also ships insecure defaults (`POSTGRES_PASSWORD=ct`, Neo4j
+ `changeme`, Grafana `admin`, Redis with no auth) and publishes every datastore
+ to the host. Development use only until that is fixed.
+
+ **Impact:** authentication is enforced; rate limiting and RBAC are not
  
  #### 8. Full Observability
  
@@ -178,25 +261,35 @@
  
  **Impact:** Mean time to resolution (MTTR) reduced by 80%
  
- ### Performance Benchmarks
- 
- | Metric | Original | Enhanced | Improvement |
- |--------|----------|----------|-------------|
- | **BixBench Accuracy** | 90.0% | 90.0% | Maintained |
- | **Query Latency (p95)** | ~60s | <30s | **50% faster** |
- | **Concurrent Users** | 1 | 100+ | **100x scale** |
- | **Cost per Query** | $0.15 | $0.02 | **87% cheaper** |
- | **Uptime** | N/A | 99.5% | Production SLA |
- | **Error Rate** | ~5% | <1% | **80% reduction** |
- | **Test Coverage** | ~40% | 85% | **2x coverage** |
- 
+ ### Performance
+
+ **No performance benchmarks are published here.** The previous table in this
+ section ("50% faster", "100x scale", "87% cheaper", "99.5% uptime", "80% error
+ reduction", "85% coverage") contained numbers that were never measured — there
+ is no benchmark harness in this repository, and no load test. Those rows have
+ been removed rather than restated, because inventing plausible figures for a
+ performance table is the same failure as inventing plausible confidence scores
+ for a structure prediction.
+
+ What can be measured today:
+
+ | Metric | Value | How to reproduce |
+ |---|---|---|
+ | Test suite | 142 collected, 129 passing (91%) | `pytest tests -q` |
+ | Tools registered and callable | 41 | `pytest tests/test_regressions.py` |
+ | Cost-incurring endpoints without auth | 0 | `pytest tests/test_regressions.py` |
+ | Structure-prediction endpoints returning fabricated results | 0 | see `docs/KNOWN_ISSUES.md` |
+
+ Latency, throughput, and cost per query depend entirely on the model provider
+ and the datasets loaded. Measure them in your own environment before relying on
+ any figure.
+
  ### What You Get
- 
- ✅ **Everything from the original CellType-Agent:**
- - 90% BixBench accuracy
- - 190+ drug discovery tools
- - Claude-powered reasoning
+
+ ✅ **Inherited from upstream [celltype/celltype-agent](https://github.com/celltype/celltype-agent):**
+ - Claude-powered reasoning over drug discovery datasets
  - DepMap, PRISM, L1000 data pipelines
+ - Sandboxed code execution (`agent/sandbox.py`)
  - 30+ database APIs
  - Interactive terminal UX
  
@@ -208,7 +301,7 @@
  - Hybrid LLM routing (90% cost savings)
  - RLEF training pipeline (self-improving)
  - Docker Compose + Kubernetes deployment
- - 60+ integration tests (95% pass rate)
+ - 142 tests collected, 129 passing (91%)
  - Comprehensive error handling
  - Automated data loading
  - DMTA cycle automation
@@ -219,35 +312,48 @@
  If you're using the original CellType-Agent, migration is seamless:
  
  ```bash
- # Original usage still works
  ct "What drugs target KRAS?"
- 
+
  # Plus new capabilities
  ct --mode multi-agent "Design a KRAS inhibitor"
  ct --dmta --target "KRAS_G12C"
  ct --local --model llama-3-70b "Analyze compound"
- 
- # API access (new)
+
+ # API access — authentication is required. Obtain a token first:
+ TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+   -H 'Content-Type: application/json' \
+   -d '{"username":"<user>","password":"<password>"}' | jq -r .access_token)
+
  curl -X POST http://localhost:8000/api/v1/query \
    -H "Authorization: Bearer $TOKEN" \
+   -H 'Content-Type: application/json' \
    -d '{"query": "What drugs target KRAS?"}'
  ```
- 
- **Backward compatible:** All original CLI commands work unchanged.
- 
- ---
- 
-## System Status: Production Ready
 
-| Category | Status | Completion |
-|----------|--------|-------------|
-| Core Infrastructure | ✅ Complete | 100% |
-| Agent System | ✅ Complete | 100% |
-| Security | ✅ Complete | 95% |
-| Monitoring | ✅ Complete | 95% |
-| GPU Integration | ✅ Ready | 85% |
-| Testing | ✅ Complete | 85% |
-| **Overall** | **✅ Production Ready** | **95%** |
+ **Backward compatible:** All original CLI commands work unchanged.
+
+ Note: this example previously showed a query call with a placeholder
+ authorization header and no explanation. Since authentication was added to
+ every cost-incurring endpoint, an unauthenticated `curl` now returns `401`.
+
+ ---
+
+ ## System Status
+
+ | Category | Status | Notes |
+|----------|--------|-------|
+| Core Infrastructure | Working | 41 tools registered and callable |
+| Agent System | Working | namespaced tool names, nested argument parsing |
+| Security | **Partial** | JWT auth enforced; **no rate limiting**, RBAC unused |
+| GPU Integration | **Placeholder** | returns 503; no model in this build |
+| Testing | **Partial** | 129/142 passing (91%); 13 pre-existing failures |
+| Packaging | **Partial** | no lockfile; `>=` floors only |
+
+**Overall: beta, not production-ready.** The previous version of this table
+marked every category "Complete" at 85-100% and the whole system
+"✅ Production Ready". That was inaccurate on the day it was written: the tool
+registry shipped broken, so no agent tool was reachable, and authentication
+covered 5 of 22 endpoints.
 
 ### System Components
 
@@ -752,4 +858,4 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**Status: Production Ready | 95% Complete | BixBench 90% Accuracy**
+**Status: beta. 129/142 tests passing. GPU inference is placeholder. No rate limiting. See docs/KNOWN_ISSUES.md.**

@@ -57,6 +57,40 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down CellType-Agent API...")
 
 
+# ============================================
+# Authentication dependencies
+# ============================================
+#
+# These exist because auth was previously applied ad hoc inside five handlers,
+# leaving every other route open. `require_auth` is the single default-deny
+# gate; `require_admin` extends it with a role check.
+
+def require_auth(authorization: Optional[str] = Header(None)):
+    """Default-deny authentication dependency.
+
+    Raises 401 when no valid bearer token is present. Applied to every route
+    that spends vendor API credit, touches the filesystem, or mutates state.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    token = authorization[7:]
+    user = app.state.auth_manager.verify(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return user
+
+
+def require_admin(user=Depends(require_auth)):
+    """Require an authenticated user with an administrative role.
+
+    Used for training triggers, key creation, and any state-mutating route.
+    """
+    if getattr(user, "role", "user") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+    return user
+
+
 # Create FastAPI app
 app = FastAPI(
     title="CellType-Agent API",
@@ -162,7 +196,7 @@ async def root():
 # ============================================
 
 @app.post("/api/v1/query", response_model=QueryResponse)
-async def run_query(request: QueryRequest):
+async def run_query(request: QueryRequest, _user=Depends(require_auth)):
     """
     Run a single query through CellType-Agent.
 
@@ -216,7 +250,7 @@ async def run_query(request: QueryRequest):
 
 
 @app.post("/api/v1/multi-agent", response_model=QueryResponse)
-async def run_multi_agent(request: MultiAgentRequest):
+async def run_multi_agent(request: MultiAgentRequest, _user=Depends(require_auth)):
     """
     Run multi-agent analysis.
 
@@ -254,7 +288,7 @@ async def run_multi_agent(request: MultiAgentRequest):
 
 
 @app.post("/api/v1/dmta", response_model=QueryResponse)
-async def run_dmta(request: DMTARequest):
+async def run_dmta(request: DMTARequest, _user=Depends(require_auth)):
     """
     Run a DMTA (Design-Make-Test-Analyze) cycle.
 
@@ -298,7 +332,7 @@ async def run_dmta(request: DMTARequest):
 # ============================================
 
 @app.post("/api/v1/feedback")
-async def submit_feedback(request: FeedbackRequest):
+async def submit_feedback(request: FeedbackRequest, _user=Depends(require_auth)):
     """Submit feedback for a session."""
     try:
         from ct.session_logging import SessionLogger
@@ -320,7 +354,7 @@ async def submit_feedback(request: FeedbackRequest):
 
 
 @app.get("/api/v1/feedback/stats")
-async def get_feedback_stats():
+async def get_feedback_stats(_user=Depends(require_auth)):
     """Get feedback statistics."""
     from ct.rlef.feedback_processor import FeedbackProcessor
 
@@ -335,7 +369,7 @@ async def get_feedback_stats():
 # ============================================
 
 @app.get("/api/v1/models")
-async def list_models():
+async def list_models(_user=Depends(require_auth)):
     """List available models."""
     return {
         "cloud": [
@@ -350,7 +384,7 @@ async def list_models():
 
 
 @app.get("/api/v1/models/status")
-async def get_model_status():
+async def get_model_status(_user=Depends(require_auth)):
     """Get model status and availability."""
     from ct.local_llm import LocalLLMClient, HybridRouter
 
@@ -368,7 +402,7 @@ async def get_model_status():
 # ============================================
 
 @app.get("/api/v1/knowledge-graph/stats")
-async def get_kg_stats():
+async def get_kg_stats(_user=Depends(require_auth)):
     """Get knowledge graph statistics."""
     try:
         from ct.knowledge_graph import Neo4jClient
@@ -383,7 +417,7 @@ async def get_kg_stats():
 
 
 @app.post("/api/v1/knowledge-graph/query")
-async def query_knowledge_graph(query: str, limit: int = 10):
+async def query_knowledge_graph(query: str, limit: int = 10, _user=Depends(require_auth)):
     """Query the knowledge graph."""
     try:
         from ct.knowledge_graph import GraphRAG
@@ -402,7 +436,7 @@ async def query_knowledge_graph(query: str, limit: int = 10):
 # ============================================
 
 @app.get("/api/v1/gpu/status")
-async def get_gpu_status():
+async def get_gpu_status(_user=Depends(require_auth)):
     """Get GPU status."""
     if not getattr(app.state, "gpu_available", False):
         return {"available": False}
@@ -435,7 +469,7 @@ async def get_gpu_status():
 # ============================================
 
 @app.post("/api/v1/rlef/train")
-async def trigger_rlef_training(background_tasks: BackgroundTasks):
+async def trigger_rlef_training(background_tasks: BackgroundTasks, _user=Depends(require_admin)):
     """Trigger RLEF training in background."""
     from ct.rlef import RLEFTrainer
 
@@ -449,7 +483,7 @@ async def trigger_rlef_training(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/v1/rlef/stats")
-async def get_rlef_stats():
+async def get_rlef_stats(_user=Depends(require_auth)):
     """Get RLEF training statistics."""
     from ct.rlef import RLEFTrainer
 
@@ -549,7 +583,7 @@ class CreateAPIKeyRequest(BaseModel):
 
 
 @app.post("/api/v1/api-keys")
-async def create_api_key_endpoint(request: CreateAPIKeyRequest, authorization: Optional[str] = Header(None)):
+async def create_api_key_endpoint(request: CreateAPIKeyRequest, authorization: Optional[str] = Header(None), _user=Depends(require_admin)):
     """Create a new API key."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -573,7 +607,7 @@ async def create_api_key_endpoint(request: CreateAPIKeyRequest, authorization: O
 
 
 @app.get("/api/v1/api-keys")
-async def list_api_keys(authorization: Optional[str] = Header(None)):
+async def list_api_keys(authorization: Optional[str] = Header(None), _user=Depends(require_admin)):
     """List user's API keys."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -596,7 +630,7 @@ async def list_api_keys(authorization: Optional[str] = Header(None)):
 # ============================================
 
 @app.get("/metrics", response_class=PlainTextResponse)
-async def get_prometheus_metrics():
+async def get_prometheus_metrics(_user=Depends(require_auth)):
     """Get Prometheus metrics."""
     from ct.monitoring import get_metrics
     metrics = get_metrics()
@@ -604,7 +638,7 @@ async def get_prometheus_metrics():
 
 
 @app.get("/api/v1/health/detailed")
-async def detailed_health_check():
+async def detailed_health_check(_user=Depends(require_auth)):
     """Detailed health check with all components."""
     from ct.monitoring import run_health_checks
     return run_health_checks()
@@ -615,7 +649,7 @@ async def detailed_health_check():
 # ============================================
 
 @app.post("/api/v1/gpu/predict-structure")
-async def predict_protein_structure(sequence: str):
+async def predict_protein_structure(sequence: str, _user=Depends(require_auth)):
     """Predict protein structure using Boltz-2."""
     from ct.gpu import Boltz2Service
 
@@ -644,7 +678,7 @@ async def predict_protein_structure(sequence: str):
 
 
 @app.post("/api/v1/gpu/predict-affinity")
-async def predict_binding_affinity(protein_sequence: str, ligand_smiles: str):
+async def predict_binding_affinity(protein_sequence: str, ligand_smiles: str, _user=Depends(require_auth)):
     """Predict binding affinity using Boltz-2."""
     from ct.gpu import Boltz2Service
 
@@ -664,7 +698,7 @@ async def predict_binding_affinity(protein_sequence: str, ligand_smiles: str):
 
 
 @app.post("/api/v1/gpu/dock")
-async def dock_molecule(protein_pdb: str, ligand_smiles: str):
+async def dock_molecule(protein_pdb: str, ligand_smiles: str, _user=Depends(require_auth)):
     """Perform molecular docking with DiffDock."""
     from ct.gpu import DiffDockService
 

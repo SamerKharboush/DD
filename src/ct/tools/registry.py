@@ -38,10 +38,40 @@ class ToolRegistry:
         self._tools: dict[str, BaseTool] = {}
         self._initialized = False
 
-    def register(self, name: str, tool: BaseTool) -> None:
-        """Register a tool."""
+    def register(self, name: str, tool: Any = None, **meta) -> Any:
+        """Register a tool.
+
+        Supports both call styles:
+
+            registry.register("admet.predict", ADMETPredictTool())
+            registry.register("admet.predict", tool=ADMETPredictTool())
+
+        and decorator form with metadata (the shape used by
+        phase1/2/3_tools.py and structure_io_tools.py):
+
+            @registry.register(name="knowledge.search_entities",
+                               description="...", category="knowledge",
+                               parameters={...})
+            def knowledge_search_entities(...): ...
+
+        The decorator form MUST return the original function unchanged. If it
+        returned a wrapper, the module-level name would bind to the wrapper and
+        the tools would no longer be directly callable in tests.
+        """
+        if tool is None:
+            def _decorator(func):
+                self._tools[name] = func
+                if meta.get("description"):
+                    logger.debug(
+                        "Registered tool %s (category=%s)",
+                        name, meta.get("category", "uncategorized"),
+                    )
+                return func  # identity: keep the name bound to the function
+            return _decorator
+
         self._tools[name] = tool
         logger.debug(f"Registered tool: {name}")
+        return tool
 
     def get_tool(self, name: str) -> Optional[BaseTool]:
         """Get a tool by name."""

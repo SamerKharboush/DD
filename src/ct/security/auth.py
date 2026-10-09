@@ -12,15 +12,57 @@ import hashlib
 import logging
 import os
 import secrets
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger("ct.security.auth")
 
-# Secret key for JWT signing
-JWT_SECRET = os.environ.get("JWT_SECRET", secrets.token_hex(32))
+# Secret key for JWT signing.
+#
+# Previously this defaulted to secrets.token_hex(32) *per process*, which is
+# worse than having no secret at all: every worker signed with a different key,
+# and every restart invalidated all outstanding tokens. A silently-rotating
+# signing key produces confusing 401s rather than an obvious failure.
+#
+# Now it is persisted once to ~/.ct/jwt_secret with 0600 permissions and reused
+# across restarts. Set JWT_SECRET in the environment (as docker-compose should)
+# to manage it externally instead.
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
+
+
+def _load_jwt_secret() -> str:
+    """Resolve the JWT signing key, persisting a generated one if needed."""
+    env_secret = os.environ.get("JWT_SECRET")
+    if env_secret:
+        return env_secret
+
+    secret_path = Path(os.path.expanduser("~/.ct/jwt_secret"))
+    try:
+        if secret_path.exists():
+            existing = secret_path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+        secret_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        generated = secrets.token_hex(32)
+        # Create with 0600 from the start rather than chmod-ing after.
+        fd = os.open(str(secret_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(generated)
+        logger.info("Generated new JWT signing key at %s", secret_path)
+        return generated
+    except Exception as exc:
+        # Fail loudly: a per-process key is a security-relevant degradation.
+        logger.error(
+            "Could not persist JWT secret (%s: %s); falling back to a "
+            "process-local key. Tokens will not survive a restart.",
+            type(exc).__name__, exc,
+        )
+        return secrets.token_hex(32)
+
+
+JWT_SECRET = _load_jwt_secret()
 
 
 @dataclass
@@ -250,32 +292,22 @@ def create_access_token(
     secret_key: Optional[str] = None,
     expires_hours: int = JWT_EXPIRATION_HOURS,
 ) -> str:
-    """
-    Create a JWT access token.
+    """Create a signed JWT access token.
 
-    Args:
-        user_id: User ID
-        username: Username
-        role: User role
-        secret_key: Secret key for signing
-        expires_hours: Token expiration in hours
+    Uses PyJWT with HS256. The previous implementation hand-rolled the
+    signature as ``sha256(header || payload || secret)``, which is not a MAC:
+    it is vulnerable to length-extension forgery, did not enforce ``alg`` on
+    verification, and compared signatures with ``!=`` (a non-constant-time
+    string comparison).
 
     Returns:
         JWT token string
     """
-    import base64
-    import json
+    import jwt as _jwt
 
     secret = secret_key or JWT_SECRET
 
-    # Create header
-    header = {
-        "alg": JWT_ALGORITHM,
-        "typ": "JWT",
-    }
-
-    # Create payload
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     payload = {
         "user_id": user_id,
         "username": username,
@@ -284,63 +316,34 @@ def create_access_token(
         "exp": int((now + datetime.timedelta(hours=expires_hours)).timestamp()),
     }
 
-    # Encode header and payload
-    header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
-    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-
-    # Create signature
-    message = f"{header_b64}.{payload_b64}"
-    signature = hashlib.sha256((message + secret).encode()).hexdigest()
-    signature_b64 = base64.urlsafe_b64encode(signature.encode()).decode().rstrip("=")
-
-    return f"{message}.{signature_b64}"
+    return _jwt.encode(payload, secret, algorithm="HS256")
 
 
 def verify_token(token: str, secret_key: Optional[str] = None) -> Optional[TokenData]:
-    """
-    Verify a JWT token.
+    """Verify a JWT token.
 
-    Args:
-        token: JWT token string
-        secret_key: Secret key for verification
+    Uses PyJWT with an explicit ``algorithms`` allowlist. Passing
+    ``algorithms=["HS256"]`` is what prevents an attacker from submitting a
+    token whose header claims ``alg: none`` (or an asymmetric algorithm) and
+    having it accepted without a signature check.
 
     Returns:
-        TokenData if valid, None otherwise
+        TokenData if valid, None otherwise.
     """
-    import base64
-    import json
+    import jwt as _jwt
 
     try:
         secret = secret_key or JWT_SECRET
-        parts = token.split(".")
 
-        if len(parts) != 3:
-            return None
+        # Raises on: bad signature, expired, malformed, wrong algorithm.
+        payload = _jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            options={"require": ["exp", "iat"]},
+        )
 
-        header_b64, payload_b64, signature_b64 = parts
-
-        # Verify signature
-        message = f"{header_b64}.{payload_b64}"
-        expected_sig = hashlib.sha256((message + secret).encode()).hexdigest()
-        expected_sig_b64 = base64.urlsafe_b64encode(expected_sig.encode()).decode().rstrip("=")
-
-        if signature_b64 != expected_sig_b64:
-            return None
-
-        # Decode payload
-        # Add padding if needed
-        padding = 4 - len(payload_b64) % 4
-        if padding != 4:
-            payload_b64 += "=" * padding
-
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-
-        # Check expiration
-        now = datetime.datetime.utcnow()
-        exp = datetime.datetime.fromtimestamp(payload.get("exp", 0))
-
-        if now > exp:
-            return None
+        exp = datetime.datetime.fromtimestamp(payload["exp"], tz=datetime.timezone.utc)
 
         return TokenData(
             user_id=payload["user_id"],
@@ -350,7 +353,8 @@ def verify_token(token: str, secret_key: Optional[str] = None) -> Optional[Token
         )
 
     except Exception as e:
-        logger.debug(f"Token verification failed: {e}")
+        # Never leak the reason to the caller; log server-side only.
+        logger.debug(f"Token verification failed: {type(e).__name__}")
         return None
 
 

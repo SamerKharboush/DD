@@ -100,12 +100,43 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+#
+# Previously allow_origins=["*"] together with allow_credentials=True. Starlette
+# responds to that combination by reflecting the requesting Origin into
+# Access-Control-Allow-Origin and emitting Access-Control-Allow-Credentials:
+# true, which means any site the operator visits can make credentialed
+# cross-origin calls to this API. It is safe today only because auth is a
+# bearer header rather than a cookie; the existing /auth/login flow makes cookie
+# auth the obvious next step, at which point this becomes full account takeover
+# from any origin. Browsers also treat the `null` origin (sandboxed iframes,
+# some redirects) as matching a wildcard.
+#
+# Now an explicit allowlist. CT_ALLOWED_ORIGINS is a comma-separated list;
+# CT_ALLOW_CREDENTIALS=1 opts back into credentialed requests, which is only
+# meaningful once an actual cookie-based session exists.
+_allowed = [
+    o.strip().rstrip("/")
+    for o in os.environ.get("CT_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
+_allow_credentials = os.environ.get("CT_ALLOW_CREDENTIALS", "").lower() in {
+    "1", "true", "yes", "on",
+}
+if "*" in _allowed:
+    # Never permit the wildcard with credentials; that is the original bug.
+    if _allow_credentials:
+        raise RuntimeError(
+            "CT_ALLOWED_ORIGINS='*' cannot be combined with credentials. "
+            "List explicit origins instead."
+        )
+    logger.warning("CT_ALLOWED_ORIGINS='*': any origin may read API responses.")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed,
+    allow_credentials=_allow_credentials,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -215,7 +246,17 @@ async def run_query(request: QueryRequest, _user=Depends(require_auth)):
 
     try:
         if request.mode == "single":
-            result = _run_query(request.query, **(request.context or {}))
+            result = _run_query(
+                request.query,
+                # `context` is caller-supplied and was previously splatted as
+                # **kwargs into run_query(query, model="...", **kwargs). Since
+                # `model` is a named parameter, `{"context": {"model": "..."}}`
+                # let any authenticated caller choose which LLM runs their
+                # query, overriding the operator's configured default and
+                # changing cost and behaviour. It is now passed as a single
+                # positional context argument that cannot bind to `model`.
+                context=request.context,
+            )
 
         elif request.mode == "multi-agent":
             from ct.agents.orchestrator import run_multi_agent_analysis

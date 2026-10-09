@@ -333,19 +333,20 @@ Format responses clearly with sections for:
 
 def run_query(
     query: str,
+    context: Optional[dict] = None,
     model: str = "claude-sonnet-4-6",
-    **kwargs,
 ) -> dict:
-    """
-    Convenience function to run a single query.
+    """Convenience function to run a single query.
 
     Args:
         query: User query
-        model: Model to use
-        **kwargs: Additional context
+        context: Optional caller context passed through to the runner.
+        model: Model to use. Sourced from server configuration only —
+            callers must not be able to override it, so this stays an
+            explicit keyword rather than being absorbable via **kwargs.
 
     Returns:
         Response dict
     """
     runner = AgentRunner(model=model)
-    return runner.run(query, context=kwargs)
+    return runner.run(query, context=context or {})

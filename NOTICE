@@ -1,0 +1,68 @@
+# NOTICE
+
+This project (`DD`) is a fork of **celltype/celltype-agent**
+(<https://github.com/celltype/celltype-agent>).
+
+## Upstream
+
+    Upstream project: celltype-agent
+    Upstream URL:     https://github.com/celltype/celltype-agent
+    Upstream author:  CellType Inc.
+    Upstream license: MIT License, Copyright (c) 2026 CellType Inc.
+    Tracked base:     c786f9d
+
+## This fork
+
+    Fork project:  DD
+    Fork URL:      https://github.com/SamerKharboush/DD
+    Fork author:   Samer Kharboush <https://github.com/SamerKharboush>
+    Fork license:  MIT License — see LICENSE
+
+This fork is distributed under the same MIT terms as upstream. The MIT license
+requires that "the above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software" — therefore the
+upstream copyright line is retained above and in `LICENSE`. Nothing in this fork
+removes, replaces, or supersedes CellType Inc.'s copyright in the code inherited
+from upstream.
+
+## Modifications by this fork
+
+The fork does not contain a clean subset/superclass relationship with upstream:
+the two have **zero shared git history**. Files below are fork-authored or
+substantially rewritten relative to upstream. Attribution for individual files:
+
+| Area | Nature of change |
+|---|---|
+| `src/ct/admet/` | Fork-only. ADMET prediction property modules. |
+| `src/ct/rlef/` | Fork-only. RLEF / reinforcement-learning-from-experiment-feedback training loop. |
+| `src/ct/gpu/` | Fork-only. Boltz2 and ESM3 GPU inference services. **Currently mocked** — see docs/KNOWN_ISSUES.md. |
+| `src/ct/local_llm/` | Fork-only. LoRA training path incl. BixBench data preparation. |
+| `src/ct/knowledge_graph/` | Fork-only. Neo4j + GraphRAG query layer. |
+| `src/ct/memory/` | Fork-only. Vector memory store. |
+| `src/ct/monitoring/` | Fork-only. Health/observability surfaces. |
+| `src/ct/validation/` | Fork-only. Result validation modules. |
+| `src/ct/campaign/` | Fork-only. Campaign orchestration. |
+| `src/ct/generative/` | Fork-only. Generative chemistry modules. |
+| `src/ct/security/` | Fork-only. Auth, API keys, secrets, RBAC helpers. **Largely unwired — see docs/KNOWN_ISSUES.md.** |
+| `src/ct/session_logging/` | Fork-only. Session trace persistence. |
+| `src/ct/agents/` | Fork-only. Specialist agent definitions. |
+| `src/ct/api/main.py` | Fork-specific FastAPI app. Differs from upstream's `src/ct/api/app.py`. |
+| Packaging + docs | Fork-owned `pyproject.toml`, README, this NOTICE, `docs/`. |
+
+Upstream-side directories the fork does **not** carry: `src/ct/cloud/`,
+`src/ct/kb/`, `src/ct/reports/`, `src/ct/ui/`, `openspec/`, `assets/`,
+`install.sh`, `Dockerfile.api`, `.github/` (CI).
+
+## Third-party components
+
+The upstream project vendors or depends on third-party packages under their own
+licenses (including RDKit, scanpy, torch, transformers, DuckDB, and others).
+Those licenses apply to those components and are unaffected by this NOTICE.
+
+## Contribution identity
+
+All contributions to this fork are authored and signed under **Samer Kharboush**
+(<https://github.com/SamerKharboush>). The enforced git identity and GPG signing
+policy is documented in `docs/IDENTITY.md`. This constraint applies only to
+contributions made to this fork; it does not alter CellType Inc.'s rights in the
+inherited upstream code.
